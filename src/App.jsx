@@ -60,8 +60,12 @@ export default function App() {
         };
 
         setLoading(true);
-        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
-        const transactionsCol = collection(db, 'artifacts', appId, 'users', userId, 'transactions');
+        
+        // Adapt Firestore path based on the environment
+        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
+
+        const goalRef = doc(db, basePath, userId, 'goals', 'main');
+        const transactionsCol = collection(db, basePath, userId, 'transactions');
         const q = query(transactionsCol, orderBy('date', 'desc'));
 
         const unsubscribeGoal = onSnapshot(goalRef, (docSnap) => {
@@ -70,6 +74,7 @@ export default function App() {
             } else {
                 setGoal(null);
             }
+            // Defer setting loading to false until transactions are also loaded
         }, (error) => {
             console.error("Error fetching goal:", error);
             setLoading(false);
@@ -78,7 +83,7 @@ export default function App() {
         const unsubscribeTransactions = onSnapshot(q, (snapshot) => {
             const trans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setTransactions(trans);
-            setLoading(false);
+            setLoading(false); // Now we can stop loading
         }, (error) => {
             console.error("Error fetching transactions:", error);
             setLoading(false);
@@ -103,29 +108,17 @@ export default function App() {
     // --- Handlers ---
     const handleSetGoal = async (name, targetAmount) => {
         if (!db || !userId) return;
-        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
-        const newGoal = {
-            name,
-            targetAmount: Number(targetAmount),
-        };
-        
+        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
+        const goalRef = doc(db, basePath, userId, 'goals', 'main');
         try {
-            // Optimistic UI update for immediate feedback
-            setGoal({ id: 'main', ...newGoal, createdAt: new Date() }); // Temporarily set with client time
-            
-            // Write to Firestore in the background
-            await setDoc(goalRef, { ...newGoal, createdAt: serverTimestamp() });
-            // The onSnapshot listener will then sync the precise server timestamp.
-        } catch (error) {
-            console.error("Failed to set goal:", error);
-            // If the write fails, revert the optimistic update
-            setGoal(null);
-        }
+            await setDoc(goalRef, { name, targetAmount: Number(targetAmount), createdAt: serverTimestamp() });
+        } catch (error) { console.error("Failed to set goal:", error); }
     };
 
     const handleUpdateGoal = async (name, targetAmount) => {
         if (!db || !userId) return;
-        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
+        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
+        const goalRef = doc(db, basePath, userId, 'goals', 'main');
         try {
             await updateDoc(goalRef, { name, targetAmount: Number(targetAmount) });
         } catch (error) { console.error("Failed to update goal:", error); }
@@ -133,7 +126,8 @@ export default function App() {
 
     const handleAddTransaction = async (transaction) => {
         if (!db || !userId) return;
-        const transactionsCol = collection(db, 'artifacts', appId, 'users', userId, 'transactions');
+        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
+        const transactionsCol = collection(db, basePath, userId, 'transactions');
         try {
             await addDoc(transactionsCol, { ...transaction, date: serverTimestamp() });
         } catch (error) { console.error("Failed to add transaction:", error); }
@@ -141,7 +135,8 @@ export default function App() {
 
     const handleUpdateTransaction = async (id, updatedData) => {
         if (!db || !userId) return;
-        const transactionRef = doc(db, 'artifacts', appId, 'users', userId, 'transactions', id);
+        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
+        const transactionRef = doc(db, basePath, userId, 'transactions', id);
         try {
             await updateDoc(transactionRef, updatedData);
         } catch (error) { console.error("Failed to update transaction:", error); }
@@ -149,7 +144,8 @@ export default function App() {
     
     const handleDeleteTransaction = async (id) => {
         if (!db || !userId) return;
-        const transactionRef = doc(db, 'artifacts', appId, 'users', userId, 'transactions', id);
+        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
+        const transactionRef = doc(db, basePath, userId, 'transactions', id);
         try {
             await deleteDoc(transactionRef);
         } catch (error) {
@@ -210,7 +206,8 @@ const GoalSetter = ({ onSetGoal }) => {
         if (name && targetAmount > 0 && !isSubmitting) {
             setIsSubmitting(true);
             await onSetGoal(name, targetAmount);
-            // No need to set isSubmitting back to false, as the component will unmount.
+            // The component will unmount once the goal is set and detected by the listener,
+            // so we don't strictly need to set isSubmitting back to false.
         }
     };
 
