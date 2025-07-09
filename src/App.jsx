@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, addDoc, collection, onSnapshot, query, deleteDoc, serverTimestamp, orderBy, updateDoc } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, addDoc, collection, onSnapshot, query, deleteDoc, serverTimestamp, orderBy, updateDoc, Timestamp } from 'firebase/firestore';
 import { ArrowUpCircle, ArrowDownCircle, Trash2, Target, Plus, X, List, Calendar, ChevronLeft, ChevronRight, Edit } from 'lucide-react';
 
 // --- Firebase Configuration ---
@@ -123,7 +123,9 @@ export default function App() {
         const basePath = typeof __app_id !== 'undefined' ? `artifacts/${__app_id}/users` : 'users';
         const transactionsCol = collection(db, basePath, userId, 'transactions');
         try {
-            await addDoc(transactionsCol, { ...transaction, date: serverTimestamp() });
+            const { date, ...rest } = transaction;
+            const dateObject = new Date(date + 'T00:00:00'); // Set time to start of day
+            await addDoc(transactionsCol, { ...rest, date: Timestamp.fromDate(dateObject) });
         } catch (error) { console.error("Failed to add transaction:", error); }
     };
 
@@ -374,12 +376,13 @@ const TransactionForm = ({ onAddTransaction }) => {
     const [type, setType] = useState('income');
     const [amount, setAmount] = useState('');
     const [description, setDescription] = useState('');
+    const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        if (!amount || !description) return;
+        if (!amount || !description || !date) return;
         const finalAmount = type === 'income' ? parseFloat(amount) : -parseFloat(amount);
-        onAddTransaction({ type, amount: finalAmount, description });
+        onAddTransaction({ type, amount: finalAmount, description, date });
         setAmount('');
         setDescription('');
     };
@@ -390,6 +393,10 @@ const TransactionForm = ({ onAddTransaction }) => {
                 <div className="grid grid-cols-2 gap-4">
                     <button type="button" onClick={() => setType('income')} className={`p-3 rounded-lg text-center font-semibold transition-colors ${type === 'income' ? 'bg-green-500 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}><ArrowUpCircle className="inline-block mr-2" />収入</button>
                     <button type="button" onClick={() => setType('expense')} className={`p-3 rounded-lg text-center font-semibold transition-colors ${type === 'expense' ? 'bg-red-500 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}><ArrowDownCircle className="inline-block mr-2" />支出</button>
+                </div>
+                <div>
+                     <label htmlFor="date" className="sr-only">日付</label>
+                     <input id="date" type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-md py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required />
                 </div>
                 <div>
                     <label htmlFor="description" className="sr-only">内容</label>
