@@ -104,9 +104,23 @@ export default function App() {
     const handleSetGoal = async (name, targetAmount) => {
         if (!db || !userId) return;
         const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
+        const newGoal = {
+            name,
+            targetAmount: Number(targetAmount),
+        };
+        
         try {
-            await setDoc(goalRef, { name, targetAmount: Number(targetAmount), createdAt: serverTimestamp() });
-        } catch (error) { console.error("Failed to set goal:", error); }
+            // Optimistic UI update for immediate feedback
+            setGoal({ id: 'main', ...newGoal, createdAt: new Date() }); // Temporarily set with client time
+            
+            // Write to Firestore in the background
+            await setDoc(goalRef, { ...newGoal, createdAt: serverTimestamp() });
+            // The onSnapshot listener will then sync the precise server timestamp.
+        } catch (error) {
+            console.error("Failed to set goal:", error);
+            // If the write fails, revert the optimistic update
+            setGoal(null);
+        }
     };
 
     const handleUpdateGoal = async (name, targetAmount) => {
@@ -189,10 +203,15 @@ const Header = ({ userId }) => (
 const GoalSetter = ({ onSetGoal }) => {
     const [name, setName] = useState('');
     const [targetAmount, setTargetAmount] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
-        if (name && targetAmount > 0) onSetGoal(name, targetAmount);
+        if (name && targetAmount > 0 && !isSubmitting) {
+            setIsSubmitting(true);
+            await onSetGoal(name, targetAmount);
+            // No need to set isSubmitting back to false, as the component will unmount.
+        }
     };
 
     return (
@@ -205,16 +224,18 @@ const GoalSetter = ({ onSetGoal }) => {
             <form onSubmit={handleSubmit} className="mt-8 space-y-6">
                 <div>
                     <label htmlFor="goalName" className="text-sm font-medium text-gray-300">目標名</label>
-                    <input id="goalName" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="例：沖縄旅行" className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required />
+                    <input id="goalName" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="例：沖縄旅行" className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required disabled={isSubmitting} />
                 </div>
                 <div>
                     <label htmlFor="targetAmount" className="text-sm font-medium text-gray-300">目標金額</label>
                     <div className="mt-1 relative rounded-md shadow-sm">
                         <div className="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center"><span className="text-gray-400 sm:text-sm">¥</span></div>
-                        <input id="targetAmount" type="number" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="100000" className="block w-full bg-gray-700 border border-gray-600 rounded-md py-3 px-4 pl-7 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required min="1" />
+                        <input id="targetAmount" type="number" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="100000" className="block w-full bg-gray-700 border border-gray-600 rounded-md py-3 px-4 pl-7 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required min="1" disabled={isSubmitting} />
                     </div>
                 </div>
-                <button type="submit" className="w-full flex justify-center py-3 px-4 border border-transparent rounded-full shadow-lg text-lg font-bold text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 focus:ring-offset-gray-800 transition-transform transform hover:scale-105">目標を設定する</button>
+                <button type="submit" className="w-full flex justify-center py-3 px-4 border border-transparent rounded-full shadow-lg text-lg font-bold text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 focus:ring-offset-gray-800 transition-all transform hover:scale-105 disabled:bg-emerald-800 disabled:cursor-not-allowed" disabled={isSubmitting}>
+                    {isSubmitting ? '設定中...' : '目標を設定する'}
+                </button>
             </form>
         </div>
     );
