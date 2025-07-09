@@ -5,7 +5,6 @@ import { getFirestore, doc, setDoc, addDoc, collection, onSnapshot, query, delet
 import { ArrowUpCircle, ArrowDownCircle, Trash2, Target, Plus, X, List, Calendar, ChevronLeft, ChevronRight, Edit } from 'lucide-react';
 
 // --- Firebase Configuration ---
-// This configuration is provided by the environment.
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
@@ -19,6 +18,7 @@ export default function App() {
     const [goal, setGoal] = useState(null);
     const [transactions, setTransactions] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [showGoalSetter, setShowGoalSetter] = useState(false);
 
     // --- Firebase Initialization and Authentication ---
     useEffect(() => {
@@ -60,21 +60,18 @@ export default function App() {
         };
 
         setLoading(true);
-        
-        // Adapt Firestore path based on the environment
-        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
-
-        const goalRef = doc(db, basePath, userId, 'goals', 'main');
-        const transactionsCol = collection(db, basePath, userId, 'transactions');
+        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
+        const transactionsCol = collection(db, 'artifacts', appId, 'users', userId, 'transactions');
         const q = query(transactionsCol, orderBy('date', 'desc'));
 
         const unsubscribeGoal = onSnapshot(goalRef, (docSnap) => {
             if (docSnap.exists()) {
                 setGoal({ id: docSnap.id, ...docSnap.data() });
+                setShowGoalSetter(false);
             } else {
                 setGoal(null);
+                setShowGoalSetter(true);
             }
-            // Defer setting loading to false until transactions are also loaded
         }, (error) => {
             console.error("Error fetching goal:", error);
             setLoading(false);
@@ -83,7 +80,7 @@ export default function App() {
         const unsubscribeTransactions = onSnapshot(q, (snapshot) => {
             const trans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setTransactions(trans);
-            setLoading(false); // Now we can stop loading
+            setLoading(false);
         }, (error) => {
             console.error("Error fetching transactions:", error);
             setLoading(false);
@@ -108,17 +105,16 @@ export default function App() {
     // --- Handlers ---
     const handleSetGoal = async (name, targetAmount) => {
         if (!db || !userId) return;
-        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
-        const goalRef = doc(db, basePath, userId, 'goals', 'main');
+        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
         try {
             await setDoc(goalRef, { name, targetAmount: Number(targetAmount), createdAt: serverTimestamp() });
+            setShowGoalSetter(false);
         } catch (error) { console.error("Failed to set goal:", error); }
     };
 
     const handleUpdateGoal = async (name, targetAmount) => {
         if (!db || !userId) return;
-        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
-        const goalRef = doc(db, basePath, userId, 'goals', 'main');
+        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
         try {
             await updateDoc(goalRef, { name, targetAmount: Number(targetAmount) });
         } catch (error) { console.error("Failed to update goal:", error); }
@@ -126,8 +122,7 @@ export default function App() {
 
     const handleAddTransaction = async (transaction) => {
         if (!db || !userId) return;
-        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
-        const transactionsCol = collection(db, basePath, userId, 'transactions');
+        const transactionsCol = collection(db, 'artifacts', appId, 'users', userId, 'transactions');
         try {
             await addDoc(transactionsCol, { ...transaction, date: serverTimestamp() });
         } catch (error) { console.error("Failed to add transaction:", error); }
@@ -135,8 +130,7 @@ export default function App() {
 
     const handleUpdateTransaction = async (id, updatedData) => {
         if (!db || !userId) return;
-        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
-        const transactionRef = doc(db, basePath, userId, 'transactions', id);
+        const transactionRef = doc(db, 'artifacts', appId, 'users', userId, 'transactions', id);
         try {
             await updateDoc(transactionRef, updatedData);
         } catch (error) { console.error("Failed to update transaction:", error); }
@@ -144,8 +138,7 @@ export default function App() {
     
     const handleDeleteTransaction = async (id) => {
         if (!db || !userId) return;
-        const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/users` : 'users';
-        const transactionRef = doc(db, basePath, userId, 'transactions', id);
+        const transactionRef = doc(db, 'artifacts', appId, 'users', userId, 'transactions', id);
         try {
             await deleteDoc(transactionRef);
         } catch (error) {
@@ -199,16 +192,10 @@ const Header = ({ userId }) => (
 const GoalSetter = ({ onSetGoal }) => {
     const [name, setName] = useState('');
     const [targetAmount, setTargetAmount] = useState('');
-    const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const handleSubmit = async (e) => {
+    const handleSubmit = (e) => {
         e.preventDefault();
-        if (name && targetAmount > 0 && !isSubmitting) {
-            setIsSubmitting(true);
-            await onSetGoal(name, targetAmount);
-            // The component will unmount once the goal is set and detected by the listener,
-            // so we don't strictly need to set isSubmitting back to false.
-        }
+        if (name && targetAmount > 0) onSetGoal(name, targetAmount);
     };
 
     return (
@@ -221,18 +208,16 @@ const GoalSetter = ({ onSetGoal }) => {
             <form onSubmit={handleSubmit} className="mt-8 space-y-6">
                 <div>
                     <label htmlFor="goalName" className="text-sm font-medium text-gray-300">目標名</label>
-                    <input id="goalName" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="例：沖縄旅行" className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required disabled={isSubmitting} />
+                    <input id="goalName" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="例：沖縄旅行" className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required />
                 </div>
                 <div>
                     <label htmlFor="targetAmount" className="text-sm font-medium text-gray-300">目標金額</label>
                     <div className="mt-1 relative rounded-md shadow-sm">
                         <div className="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center"><span className="text-gray-400 sm:text-sm">¥</span></div>
-                        <input id="targetAmount" type="number" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="100000" className="block w-full bg-gray-700 border border-gray-600 rounded-md py-3 px-4 pl-7 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required min="1" disabled={isSubmitting} />
+                        <input id="targetAmount" type="number" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="100000" className="block w-full bg-gray-700 border border-gray-600 rounded-md py-3 px-4 pl-7 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required min="1" />
                     </div>
                 </div>
-                <button type="submit" className="w-full flex justify-center py-3 px-4 border border-transparent rounded-full shadow-lg text-lg font-bold text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 focus:ring-offset-gray-800 transition-all transform hover:scale-105 disabled:bg-emerald-800 disabled:cursor-not-allowed" disabled={isSubmitting}>
-                    {isSubmitting ? '設定中...' : '目標を設定する'}
-                </button>
+                <button type="submit" className="w-full flex justify-center py-3 px-4 border border-transparent rounded-full shadow-lg text-lg font-bold text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 focus:ring-offset-gray-800 transition-transform transform hover:scale-105">目標を設定する</button>
             </form>
         </div>
     );
