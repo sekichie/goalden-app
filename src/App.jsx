@@ -19,7 +19,6 @@ export default function App() {
     const [goal, setGoal] = useState(null);
     const [transactions, setTransactions] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [showGoalSetter, setShowGoalSetter] = useState(false);
 
     // --- Firebase Initialization and Authentication ---
     useEffect(() => {
@@ -68,10 +67,8 @@ export default function App() {
         const unsubscribeGoal = onSnapshot(goalRef, (docSnap) => {
             if (docSnap.exists()) {
                 setGoal({ id: docSnap.id, ...docSnap.data() });
-                setShowGoalSetter(false);
             } else {
                 setGoal(null);
-                setShowGoalSetter(true);
             }
         }, (error) => {
             console.error("Error fetching goal:", error);
@@ -109,7 +106,6 @@ export default function App() {
         const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
         try {
             await setDoc(goalRef, { name, targetAmount: Number(targetAmount), createdAt: serverTimestamp() });
-            setShowGoalSetter(false);
         } catch (error) { console.error("Failed to set goal:", error); }
     };
 
