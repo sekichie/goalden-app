@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, addDoc, collection, onSnapshot, query, deleteDoc, serverTimestamp, orderBy } from 'firebase/firestore';
-import { ArrowUpCircle, ArrowDownCircle, Trash2, Target, Plus, X, List, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, setDoc, addDoc, collection, onSnapshot, query, deleteDoc, serverTimestamp, orderBy, updateDoc } from 'firebase/firestore';
+import { ArrowUpCircle, ArrowDownCircle, Trash2, Target, Plus, X, List, Calendar, ChevronLeft, ChevronRight, Edit } from 'lucide-react';
 
 // --- Firebase Configuration ---
-// Vercelの環境変数から設定を読み込みます
-const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG);
+// This configuration is provided by the environment.
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 // --- Main App Component ---
 export default function App() {
@@ -34,9 +35,13 @@ export default function App() {
                     setUserId(user.uid);
                 } else {
                     try {
-                        await signInAnonymously(authInstance);
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(authInstance, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(authInstance);
+                        }
                     } catch (error) {
-                        console.error("Anonymous sign-in failed:", error);
+                        console.error("Authentication failed:", error);
                     }
                 }
                 setIsAuthReady(true);
@@ -56,9 +61,8 @@ export default function App() {
         };
 
         setLoading(true);
-        // Firestoreのパスをシンプルに変更
-        const goalRef = doc(db, 'users', userId, 'goals', 'main');
-        const transactionsCol = collection(db, 'users', userId, 'transactions');
+        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
+        const transactionsCol = collection(db, 'artifacts', appId, 'users', userId, 'transactions');
         const q = query(transactionsCol, orderBy('date', 'desc'));
 
         const unsubscribeGoal = onSnapshot(goalRef, (docSnap) => {
@@ -102,24 +106,40 @@ export default function App() {
     // --- Handlers ---
     const handleSetGoal = async (name, targetAmount) => {
         if (!db || !userId) return;
-        const goalRef = doc(db, 'users', userId, 'goals', 'main');
+        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
         try {
             await setDoc(goalRef, { name, targetAmount: Number(targetAmount), createdAt: serverTimestamp() });
             setShowGoalSetter(false);
         } catch (error) { console.error("Failed to set goal:", error); }
     };
 
+    const handleUpdateGoal = async (name, targetAmount) => {
+        if (!db || !userId) return;
+        const goalRef = doc(db, 'artifacts', appId, 'users', userId, 'goals', 'main');
+        try {
+            await updateDoc(goalRef, { name, targetAmount: Number(targetAmount) });
+        } catch (error) { console.error("Failed to update goal:", error); }
+    };
+
     const handleAddTransaction = async (transaction) => {
         if (!db || !userId) return;
-        const transactionsCol = collection(db, 'users', userId, 'transactions');
+        const transactionsCol = collection(db, 'artifacts', appId, 'users', userId, 'transactions');
         try {
             await addDoc(transactionsCol, { ...transaction, date: serverTimestamp() });
         } catch (error) { console.error("Failed to add transaction:", error); }
     };
+
+    const handleUpdateTransaction = async (id, updatedData) => {
+        if (!db || !userId) return;
+        const transactionRef = doc(db, 'artifacts', appId, 'users', userId, 'transactions', id);
+        try {
+            await updateDoc(transactionRef, updatedData);
+        } catch (error) { console.error("Failed to update transaction:", error); }
+    };
     
     const handleDeleteTransaction = async (id) => {
         if (!db || !userId) return;
-        const transactionRef = doc(db, 'users', userId, 'transactions', id);
+        const transactionRef = doc(db, 'artifacts', appId, 'users', userId, 'transactions', id);
         try {
             await deleteDoc(transactionRef);
         } catch (error) {
@@ -133,7 +153,7 @@ export default function App() {
     return (
         <div className="bg-gray-900 text-gray-100 min-h-screen font-sans antialiased">
             <div className="container mx-auto p-4 md:p-8 max-w-4xl">
-                <Header />
+                <Header userId={userId} />
                 {goal ? (
                     <Dashboard
                         goal={goal}
@@ -142,6 +162,8 @@ export default function App() {
                         transactions={transactions}
                         onAddTransaction={handleAddTransaction}
                         onDeleteTransaction={handleDeleteTransaction}
+                        onUpdateGoal={handleUpdateGoal}
+                        onUpdateTransaction={handleUpdateTransaction}
                     />
                 ) : (
                     <GoalSetter onSetGoal={handleSetGoal} />
@@ -152,7 +174,7 @@ export default function App() {
     );
 }
 
-// --- Sub-components (以下は変更なし) ---
+// --- Sub-components ---
 
 const LoadingSpinner = () => (
     <div className="flex items-center justify-center min-h-screen bg-gray-900">
@@ -160,10 +182,11 @@ const LoadingSpinner = () => (
     </div>
 );
 
-const Header = () => (
+const Header = ({ userId }) => (
     <header className="mb-8">
         <h1 className="text-4xl md:text-5xl font-bold text-white text-center tracking-tight">Goalden</h1>
-        <p className="text-center text-emerald-400 mt-2">目標達成を、最も美しく。</p>
+        <p className="text-center text-emerald-400 mt-2">目標達成をアシスト</p>
+        {userId && <p className="text-center text-xs text-gray-500 mt-4">UserID: {userId}</p>}
     </header>
 );
 
@@ -201,223 +224,139 @@ const GoalSetter = ({ onSetGoal }) => {
     );
 };
 
-const Dashboard = ({ goal, currentBalance, progress, transactions, onAddTransaction, onDeleteTransaction }) => {
+const Dashboard = ({ goal, currentBalance, progress, transactions, onAddTransaction, onDeleteTransaction, onUpdateGoal, onUpdateTransaction }) => {
     const [showTransactionForm, setShowTransactionForm] = useState(false);
     const [view, setView] = useState('list');
     const [selectedDate, setSelectedDate] = useState(null);
-    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+    const [isGoalEditorOpen, setIsGoalEditorOpen] = useState(false);
+    const [transactionToEdit, setTransactionToEdit] = useState(null);
 
     const handleDateClick = useCallback((date) => {
         const dateKey = date.toISOString().split('T')[0];
         const transactionsOnDate = transactions.filter(t => t.date && new Date(t.date.seconds * 1000).toISOString().split('T')[0] === dateKey);
         if(transactionsOnDate.length > 0) {
             setSelectedDate(date);
-            setIsModalOpen(true);
+            setIsDetailModalOpen(true);
         }
     }, [transactions]);
-
-    const handleCloseModal = () => {
-        setIsModalOpen(false);
-        setSelectedDate(null);
-    };
 
     const handleAddAndClose = (transaction) => {
         onAddTransaction(transaction);
         setShowTransactionForm(false);
     };
 
+    const handleUpdateAndClose = (id, updatedData) => {
+        onUpdateTransaction(id, updatedData);
+        setTransactionToEdit(null);
+    };
+
+    const openTransactionEditor = (transaction) => {
+        setTransactionToEdit(transaction);
+        setIsDetailModalOpen(false); // Close detail modal if open
+    };
+
     return (
         <div className="space-y-8 animate-fade-in">
             <div className="bg-gray-800 p-4 md:p-6 rounded-2xl shadow-lg">
-                <button 
-                    onClick={() => setShowTransactionForm(!showTransactionForm)}
-                    className="w-full flex items-center justify-center gap-3 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-bold py-4 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all transform hover:scale-105 text-lg"
-                >
+                <button onClick={() => setShowTransactionForm(!showTransactionForm)} className="w-full flex items-center justify-center gap-3 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-bold py-4 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all transform hover:scale-105 text-lg">
                     {showTransactionForm ? <X size={24}/> : <Plus size={24} />}
                     {showTransactionForm ? 'フォームを閉じる' : '収支を記録する'}
                 </button>
-
-                {showTransactionForm && (
-                    <div className="mt-6 animate-fade-in-down">
-                        <TransactionForm onAddTransaction={handleAddAndClose} />
-                    </div>
-                )}
+                {showTransactionForm && <div className="mt-6 animate-fade-in-down"><TransactionForm onAddTransaction={handleAddAndClose} /></div>}
             </div>
 
-            <ProgressCard goal={goal} currentBalance={currentBalance} progress={progress} />
+            <ProgressCard goal={goal} currentBalance={currentBalance} progress={progress} onEditClick={() => setIsGoalEditorOpen(true)} />
             
             <div className="bg-gray-800 p-4 md:p-6 rounded-2xl shadow-lg">
                 <ViewSwitcher view={view} setView={setView} />
                 {view === 'list' ? (
-                    <TransactionList transactions={transactions} onDeleteTransaction={onDeleteTransaction} />
+                    <TransactionList transactions={transactions} onDeleteTransaction={onDeleteTransaction} onEditTransaction={openTransactionEditor} />
                 ) : (
                     <CalendarView transactions={transactions} onDateClick={handleDateClick} />
                 )}
             </div>
 
-            {isModalOpen && selectedDate && (
-                <TransactionDetailModal
-                    date={selectedDate}
-                    transactions={transactions}
-                    onClose={handleCloseModal}
-                    onDeleteTransaction={onDeleteTransaction}
-                />
-            )}
+            {isGoalEditorOpen && <GoalEditorModal goal={goal} onUpdateGoal={onUpdateGoal} onClose={() => setIsGoalEditorOpen(false)} />}
+            {transactionToEdit && <TransactionEditorModal transaction={transactionToEdit} onUpdateTransaction={handleUpdateAndClose} onClose={() => setTransactionToEdit(null)} />}
+            {isDetailModalOpen && selectedDate && <TransactionDetailModal date={selectedDate} transactions={transactions} onClose={() => setIsDetailModalOpen(false)} onDeleteTransaction={onDeleteTransaction} onEditTransaction={openTransactionEditor} />}
         </div>
     );
 };
 
-const ViewSwitcher = ({ view, setView }) => (
-    <div className="flex justify-center mb-6">
-        <div className="bg-gray-700 p-1 rounded-full flex items-center">
-            <button onClick={() => setView('list')} className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${view === 'list' ? 'bg-emerald-500 text-white' : 'text-gray-300 hover:bg-gray-600'}`}>
-                <List className="inline-block mr-2" size={16} />
-                リスト
-            </button>
-            <button onClick={() => setView('calendar')} className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${view === 'calendar' ? 'bg-emerald-500 text-white' : 'text-gray-300 hover:bg-gray-600'}`}>
-                <Calendar className="inline-block mr-2" size={16} />
-                カレンダー
-            </button>
-        </div>
-    </div>
-);
-
-const CalendarView = ({ transactions, onDateClick }) => {
-    const [currentDate, setCurrentDate] = useState(new Date());
-
-    const dailyData = useMemo(() => {
-        const data = {};
-        transactions.forEach(t => {
-            if (t.date && t.date.seconds) {
-                const dateKey = new Date(t.date.seconds * 1000).toISOString().split('T')[0];
-                if (!data[dateKey]) {
-                    data[dateKey] = { income: 0, expense: 0 };
-                }
-                if (t.amount > 0) data[dateKey].income += t.amount;
-                else data[dateKey].expense += t.amount;
-            }
-        });
-        return data;
-    }, [transactions]);
-
-    const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-    const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
-    const startDay = startOfMonth.getDay();
-    const daysInMonth = endOfMonth.getDate();
-
-    const calendarDays = [];
-    for (let i = 0; i < startDay; i++) {
-        calendarDays.push(<div key={`empty-start-${i}`} className="border-r border-b border-gray-700"></div>);
-    }
-    for (let day = 1; day <= daysInMonth; day++) {
-        const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
-        const dateKey = date.toISOString().split('T')[0];
-        const dataForDay = dailyData[dateKey];
-        const isToday = new Date().toISOString().split('T')[0] === dateKey;
-
-        calendarDays.push(
-            <div key={day} onClick={() => onDateClick(date)} className={`p-2 border-r border-b border-gray-700 flex flex-col justify-between h-24 md:h-32 transition-colors ${dataForDay ? 'cursor-pointer hover:bg-gray-600/50' : ''}`}>
-                <div>
-                    <span className={`font-bold ${isToday ? 'text-emerald-400' : 'text-white'}`}>{day}</span>
-                </div>
-                {dataForDay && (
-                    <div className="text-xs text-right">
-                        {dataForDay.income > 0 && <p className="text-green-400 truncate">+ {dataForDay.income.toLocaleString()}</p>}
-                        {dataForDay.expense < 0 && <p className="text-red-400 truncate">{dataForDay.expense.toLocaleString()}</p>}
-                    </div>
-                )}
-            </div>
-        );
-    }
-    const remainingCells = (7 - (calendarDays.length % 7)) % 7;
-    for (let i = 0; i < remainingCells; i++) {
-        calendarDays.push(<div key={`empty-end-${i}`} className="border-r border-b border-gray-700"></div>);
-    }
-
-    const prevMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
-    const nextMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
-
-    const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+const ProgressCard = ({ goal, currentBalance, progress, onEditClick }) => {
+    const remaining = goal.targetAmount - currentBalance;
 
     return (
-        <div className="animate-fade-in">
-            <div className="flex items-center justify-between mb-4">
-                <button onClick={prevMonth} className="p-2 rounded-full hover:bg-gray-700"><ChevronLeft /></button>
-                <h3 className="text-lg font-bold">{currentDate.getFullYear()}年 {currentDate.getMonth() + 1}月</h3>
-                <button onClick={nextMonth} className="p-2 rounded-full hover:bg-gray-700"><ChevronRight /></button>
+        <div className="bg-gray-800 rounded-2xl shadow-2xl p-6 md:p-8 w-full">
+            <div className="flex justify-between items-start">
+                <div>
+                    <div className="flex items-center gap-3">
+                        <h2 className="text-2xl md:text-3xl font-bold text-white truncate" title={goal.name}>{goal.name}</h2>
+                        <button onClick={onEditClick} className="text-gray-400 hover:text-white transition-colors flex-shrink-0"><Edit size={20} /></button>
+                    </div>
+                    <p className="text-lg text-emerald-400 mt-1">目標金額: {new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(goal.targetAmount)}</p>
+                </div>
+                <div className="text-right flex-shrink-0 pl-4">
+                    <span className="text-4xl md:text-5xl font-bold text-white drop-shadow-lg">{Math.round(progress)}%</span>
+                    <p className="text-gray-400">達成率</p>
+                </div>
             </div>
-            <div className="grid grid-cols-7 border-t border-l border-gray-700">
-                {weekdays.map(day => <div key={day} className="text-center font-semibold text-sm py-2 border-r border-b border-gray-700 text-emerald-400">{day}</div>)}
-                {calendarDays}
+            
+            <div className="w-full bg-gray-700 rounded-full h-4 mt-6">
+                <div className="bg-emerald-500 h-4 rounded-full" style={{ width: `${progress}%`, transition: 'width 0.5s ease-out' }}></div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-left">
+                <div className="bg-gray-700/50 p-4 rounded-lg">
+                    <p className="text-sm text-gray-400">現在の貯金額</p>
+                    <p className="text-2xl font-semibold text-white">{new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(currentBalance)}</p>
+                </div>
+                <div className="bg-gray-700/50 p-4 rounded-lg">
+                    <p className="text-sm text-gray-400">残り金額</p>
+                    <p className="text-2xl font-semibold text-white">{new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(Math.max(0, remaining))}</p>
+                </div>
             </div>
         </div>
     );
 };
 
-const TransactionDetailModal = ({ date, transactions, onClose, onDeleteTransaction }) => {
-    const dateKey = date.toISOString().split('T')[0];
-    const dailyTransactions = useMemo(() => {
-        return transactions
-            .filter(t => t.date && new Date(t.date.seconds * 1000).toISOString().split('T')[0] === dateKey)
-            .sort((a, b) => b.date.seconds - a.date.seconds);
-    }, [date, transactions]);
+const GoalEditorModal = ({ goal, onUpdateGoal, onClose }) => {
+    const [name, setName] = useState(goal.name);
+    const [targetAmount, setTargetAmount] = useState(goal.targetAmount);
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (name && targetAmount > 0) {
+            onUpdateGoal(name, targetAmount);
+            onClose();
+        }
+    };
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 animate-fade-in" onClick={onClose}>
-            <div className="bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-lg m-4 animate-fade-in-up" onClick={e => e.stopPropagation()}>
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xl font-bold text-white">{new Date(date).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })} の収支</h3>
+            <div className="bg-gray-800 rounded-2xl shadow-2xl p-8 w-full max-w-md m-4 animate-fade-in-up" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-2xl font-bold text-white">目標を編集</h3>
                     <button onClick={onClose} className="text-gray-400 hover:text-white"><X /></button>
                 </div>
-                {dailyTransactions.length > 0 ? (
-                    <ul className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                        {dailyTransactions.map(t => (
-                            <li key={t.id} className="flex items-center justify-between bg-gray-700/50 p-3 rounded-lg group">
-                                <div className="flex items-center gap-4">
-                                    {t.amount > 0 ? <ArrowUpCircle className="text-green-400 flex-shrink-0" size={24} /> : <ArrowDownCircle className="text-red-400 flex-shrink-0" size={24} />}
-                                    <div>
-                                        <p className="font-semibold text-white">{t.description}</p>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-4">
-                                    <p className={`font-bold text-lg ${t.amount > 0 ? 'text-green-400' : 'text-red-400'}`}>{new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(t.amount)}</p>
-                                    <button onClick={() => onDeleteTransaction(t.id)} className="text-gray-500 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={18} /></button>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
-                ) : (
-                    <p className="text-gray-400 text-center py-4">この日の取引はありません。</p>
-                )}
-            </div>
-        </div>
-    );
-};
-
-const ProgressCard = ({ goal, currentBalance, progress }) => {
-    const remaining = goal.targetAmount - currentBalance;
-    const circumference = 2 * Math.PI * 120;
-    const offset = circumference - (progress / 100) * circumference;
-
-    return (
-        <div className="bg-gray-800 rounded-2xl shadow-2xl p-6 md:p-8 flex flex-col md:flex-row items-center gap-8">
-            <div className="relative w-48 h-48 md:w-64 md:h-64 flex-shrink-0">
-                <svg className="w-full h-full" viewBox="0 0 250 250">
-                    <circle cx="125" cy="125" r="120" strokeWidth="10" className="text-gray-700" fill="transparent" />
-                    <circle cx="125" cy="125" r="120" strokeWidth="10" className="text-emerald-500" fill="transparent" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} transform="rotate(-90 125 125)" style={{ transition: 'stroke-dashoffset 0.5s ease-out' }} />
-                </svg>
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                    <span className="text-4xl md:text-5xl font-bold text-white">{Math.round(progress)}%</span>
-                    <span className="text-gray-400">達成率</span>
-                </div>
-            </div>
-            <div className="text-center md:text-left w-full">
-                <h2 className="text-2xl md:text-3xl font-bold text-white truncate" title={goal.name}>{goal.name}</h2>
-                <p className="text-lg text-emerald-400 mt-1">目標金額: {new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(goal.targetAmount)}</p>
-                <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-left">
-                    <div className="bg-gray-700/50 p-4 rounded-lg"><p className="text-sm text-gray-400">現在の貯金額</p><p className="text-2xl font-semibold text-white">{new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(currentBalance)}</p></div>
-                    <div className="bg-gray-700/50 p-4 rounded-lg"><p className="text-sm text-gray-400">残り金額</p><p className="text-2xl font-semibold text-white">{new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(Math.max(0, remaining))}</p></div>
-                </div>
+                <form onSubmit={handleSubmit} className="space-y-6">
+                    <div>
+                        <label htmlFor="editGoalName" className="text-sm font-medium text-gray-300">目標名</label>
+                        <input id="editGoalName" type="text" value={name} onChange={(e) => setName(e.target.value)} className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required />
+                    </div>
+                    <div>
+                        <label htmlFor="editTargetAmount" className="text-sm font-medium text-gray-300">目標金額</label>
+                        <div className="mt-1 relative rounded-md shadow-sm">
+                            <div className="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center"><span className="text-gray-400 sm:text-sm">¥</span></div>
+                            <input id="editTargetAmount" type="number" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} className="block w-full bg-gray-700 border border-gray-600 rounded-md py-3 px-4 pl-7 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required min="1" />
+                        </div>
+                    </div>
+                    <div className="flex justify-end gap-4 pt-4">
+                        <button type="button" onClick={onClose} className="py-2 px-6 rounded-full text-white bg-gray-600 hover:bg-gray-500 transition-colors">キャンセル</button>
+                        <button type="submit" className="py-2 px-6 rounded-full text-white bg-emerald-600 hover:bg-emerald-700 transition-colors font-semibold">保存する</button>
+                    </div>
+                </form>
             </div>
         </div>
     );
@@ -461,14 +400,56 @@ const TransactionForm = ({ onAddTransaction }) => {
     );
 };
 
-const TransactionList = ({ transactions, onDeleteTransaction }) => {
-    if (transactions.length === 0) {
-        return (
-            <div className="text-center py-12 animate-fade-in">
-                <p className="text-gray-400">まだ取引履歴がありません。</p>
-                <p className="text-gray-500 mt-2">最初の収支を記録してみましょう！</p>
+const TransactionEditorModal = ({ transaction, onUpdateTransaction, onClose }) => {
+    const [type, setType] = useState(transaction.amount > 0 ? 'income' : 'expense');
+    const [amount, setAmount] = useState(Math.abs(transaction.amount));
+    const [description, setDescription] = useState(transaction.description);
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!amount || !description) return;
+        const finalAmount = type === 'income' ? parseFloat(amount) : -parseFloat(amount);
+        onUpdateTransaction(transaction.id, { description, amount: finalAmount, type });
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 animate-fade-in" onClick={onClose}>
+            <div className="bg-gray-800 rounded-2xl shadow-2xl p-8 w-full max-w-md m-4 animate-fade-in-up" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-2xl font-bold text-white">記録を編集</h3>
+                    <button onClick={onClose} className="text-gray-400 hover:text-white"><X /></button>
+                </div>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <button type="button" onClick={() => setType('income')} className={`p-3 rounded-lg text-center font-semibold transition-colors ${type === 'income' ? 'bg-green-500 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}><ArrowUpCircle className="inline-block mr-2" />収入</button>
+                        <button type="button" onClick={() => setType('expense')} className={`p-3 rounded-lg text-center font-semibold transition-colors ${type === 'expense' ? 'bg-red-500 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}><ArrowDownCircle className="inline-block mr-2" />支出</button>
+                    </div>
+                    <div>
+                        <label htmlFor="editDescription" className="text-sm font-medium text-gray-300">内容</label>
+                        <input id="editDescription" type="text" value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1 w-full bg-gray-700 border border-gray-600 rounded-md py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required />
+                    </div>
+                    <div>
+                        <label htmlFor="editAmount" className="text-sm font-medium text-gray-300">金額</label>
+                        <div className="relative mt-1">
+                            <div className="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center"><span className="text-gray-400 sm:text-sm">¥</span></div>
+                            <input id="editAmount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-md py-3 px-4 pl-7 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" required min="0" />
+                        </div>
+                    </div>
+                    <div className="flex justify-end gap-4 pt-4">
+                        <button type="button" onClick={onClose} className="py-2 px-6 rounded-full text-white bg-gray-600 hover:bg-gray-500 transition-colors">キャンセル</button>
+                        <button type="submit" className="py-2 px-6 rounded-full text-white bg-emerald-600 hover:bg-emerald-700 transition-colors font-semibold">保存する</button>
+                    </div>
+                </form>
             </div>
-        );
+        </div>
+    );
+};
+
+
+const TransactionList = ({ transactions, onDeleteTransaction, onEditTransaction }) => {
+    if (transactions.length === 0) {
+        return <div className="text-center py-12 animate-fade-in"><p className="text-gray-400">まだ取引履歴がありません。</p><p className="text-gray-500 mt-2">最初の収支を記録してみましょう！</p></div>;
     }
     return (
         <div className="animate-fade-in">
@@ -483,13 +464,117 @@ const TransactionList = ({ transactions, onDeleteTransaction }) => {
                                 <p className="text-sm text-gray-400">{t.date ? new Date(t.date.seconds * 1000).toLocaleDateString('ja-JP') : '日付不明'}</p>
                             </div>
                         </div>
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
                             <p className={`font-bold text-lg ${t.amount > 0 ? 'text-green-400' : 'text-red-400'}`}>{new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(t.amount)}</p>
-                            <button onClick={() => onDeleteTransaction(t.id)} className="text-gray-500 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={18} /></button>
+                            <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={() => onEditTransaction(t)} className="text-gray-400 hover:text-emerald-400 p-2"><Edit size={16} /></button>
+                                <button onClick={() => onDeleteTransaction(t.id)} className="text-gray-400 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                            </div>
                         </div>
                     </li>
                 ))}
             </ul>
+        </div>
+    );
+};
+
+const TransactionDetailModal = ({ date, transactions, onClose, onDeleteTransaction, onEditTransaction }) => {
+    const dateKey = date.toISOString().split('T')[0];
+    const dailyTransactions = useMemo(() => {
+        return transactions.filter(t => t.date && new Date(t.date.seconds * 1000).toISOString().split('T')[0] === dateKey).sort((a, b) => b.date.seconds - a.date.seconds);
+    }, [date, transactions]);
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 animate-fade-in" onClick={onClose}>
+            <div className="bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-lg m-4 animate-fade-in-up" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-bold text-white">{new Date(date).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })} の収支</h3>
+                    <button onClick={onClose} className="text-gray-400 hover:text-white"><X /></button>
+                </div>
+                {dailyTransactions.length > 0 ? (
+                    <ul className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                        {dailyTransactions.map(t => (
+                            <li key={t.id} className="flex items-center justify-between bg-gray-700/50 p-3 rounded-lg group">
+                                <div className="flex items-center gap-4">
+                                    {t.amount > 0 ? <ArrowUpCircle className="text-green-400 flex-shrink-0" size={24} /> : <ArrowDownCircle className="text-red-400 flex-shrink-0" size={24} />}
+                                    <div><p className="font-semibold text-white">{t.description}</p></div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <p className={`font-bold text-lg ${t.amount > 0 ? 'text-green-400' : 'text-red-400'}`}>{new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(t.amount)}</p>
+                                    <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={() => onEditTransaction(t)} className="text-gray-400 hover:text-emerald-400 p-2"><Edit size={16} /></button>
+                                        <button onClick={() => onDeleteTransaction(t.id)} className="text-gray-400 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                                    </div>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="text-gray-400 text-center py-4">この日の取引はありません。</p>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const ViewSwitcher = ({ view, setView }) => (
+    <div className="flex justify-center mb-6">
+        <div className="bg-gray-700 p-1 rounded-full flex items-center">
+            <button onClick={() => setView('list')} className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${view === 'list' ? 'bg-emerald-500 text-white' : 'text-gray-300 hover:bg-gray-600'}`}><List className="inline-block mr-2" size={16} />リスト</button>
+            <button onClick={() => setView('calendar')} className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${view === 'calendar' ? 'bg-emerald-500 text-white' : 'text-gray-300 hover:bg-gray-600'}`}><Calendar className="inline-block mr-2" size={16} />カレンダー</button>
+        </div>
+    </div>
+);
+
+const CalendarView = ({ transactions, onDateClick }) => {
+    const [currentDate, setCurrentDate] = useState(new Date());
+    const dailyData = useMemo(() => {
+        const data = {};
+        transactions.forEach(t => {
+            if (t.date && t.date.seconds) {
+                const dateKey = new Date(t.date.seconds * 1000).toISOString().split('T')[0];
+                if (!data[dateKey]) data[dateKey] = { income: 0, expense: 0 };
+                if (t.amount > 0) data[dateKey].income += t.amount; else data[dateKey].expense += t.amount;
+            }
+        });
+        return data;
+    }, [transactions]);
+
+    const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+    const startDay = startOfMonth.getDay();
+    const daysInMonth = endOfMonth.getDate();
+    const calendarDays = [];
+    for (let i = 0; i < startDay; i++) calendarDays.push(<div key={`empty-start-${i}`} className="border-r border-b border-gray-700"></div>);
+    for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+        const dateKey = date.toISOString().split('T')[0];
+        const dataForDay = dailyData[dateKey];
+        const isToday = new Date().toISOString().split('T')[0] === dateKey;
+        calendarDays.push(
+            <div key={day} onClick={() => onDateClick(date)} className={`p-2 border-r border-b border-gray-700 flex flex-col justify-between h-24 md:h-32 transition-colors ${dataForDay ? 'cursor-pointer hover:bg-gray-600/50' : ''}`}>
+                <div><span className={`font-bold ${isToday ? 'text-emerald-400' : 'text-white'}`}>{day}</span></div>
+                {dataForDay && <div className="text-xs text-right">{dataForDay.income > 0 && <p className="text-green-400 truncate">+ {dataForDay.income.toLocaleString()}</p>}{dataForDay.expense < 0 && <p className="text-red-400 truncate">{dataForDay.expense.toLocaleString()}</p>}</div>}
+            </div>
+        );
+    }
+    const remainingCells = (7 - (calendarDays.length % 7)) % 7;
+    for (let i = 0; i < remainingCells; i++) calendarDays.push(<div key={`empty-end-${i}`} className="border-r border-b border-gray-700"></div>);
+    const prevMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+    const nextMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+    const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+
+    return (
+        <div className="animate-fade-in">
+            <div className="flex items-center justify-between mb-4">
+                <button onClick={prevMonth} className="p-2 rounded-full hover:bg-gray-700"><ChevronLeft /></button>
+                <h3 className="text-lg font-bold">{currentDate.getFullYear()}年 {currentDate.getMonth() + 1}月</h3>
+                <button onClick={nextMonth} className="p-2 rounded-full hover:bg-gray-700"><ChevronRight /></button>
+            </div>
+            <div className="grid grid-cols-7 border-t border-l border-gray-700">
+                {weekdays.map(day => <div key={day} className="text-center font-semibold text-sm py-2 border-r border-b border-gray-700 text-emerald-400">{day}</div>)}
+                {calendarDays}
+            </div>
         </div>
     );
 };
@@ -500,7 +585,6 @@ const Footer = () => (
     </footer>
 );
 
-// Add some basic CSS for animations
 const style = document.createElement('style');
 style.textContent = `
   @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
